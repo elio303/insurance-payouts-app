@@ -1,13 +1,12 @@
-"use client"
+"use client";
 
-import React, { useCallback, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
-import * as dfd from 'danfojs';
-import * as XLSX from 'xlsx';
-import dayjs from 'dayjs';
-import Groupby from 'danfojs/dist/danfojs-base/aggregators/groupby';
-import { DataFrame } from 'danfojs/dist/danfojs-base';
-
+import React, { useCallback, useState } from "react";
+import { useDropzone } from "react-dropzone";
+import * as dfd from "danfojs";
+import * as XLSX from "xlsx";
+import dayjs from "dayjs";
+import Groupby from "danfojs/dist/danfojs-base/aggregators/groupby";
+import { DataFrame } from "danfojs/dist/danfojs-base";
 
 interface FileData {
   name: string;
@@ -17,96 +16,146 @@ interface FileData {
 export default function Home() {
   const [files, setFiles] = useState<FileData[]>([]);
 
+  // Drop event handler
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const mappedFiles = acceptedFiles.map(file => ({
+    const mappedFiles = mapFiles(acceptedFiles);
+    setFiles(prevFiles => [...prevFiles, ...mappedFiles]);
+
+    let df: dfd.DataFrame = await loadAndCleanData(acceptedFiles[0]);
+    const workbook: XLSX.WorkBook = XLSX.utils.book_new();
+
+    createGroupedSheets(workbook, df);
+    createEarningsReportSheet(workbook, df);
+
+    XLSX.writeFile(workbook, "grouped_data.xlsx");
+  }, []);
+
+  // Map files for display
+  const mapFiles = (acceptedFiles: File[]): FileData[] =>
+    acceptedFiles.map(file => ({
       name: file.name,
       size: file.size,
     }));
 
-    setFiles(prevFiles => [...prevFiles, ...mappedFiles]);
+  // Load and clean data from file
+  const loadAndCleanData = async (file: File): Promise<dfd.DataFrame> => {
+    let df: dfd.DataFrame = await dfd.readExcel(file) as dfd.DataFrame;
+    df = new dfd.DataFrame(df.values.slice(3, -2), { columns: df.values[2] as any });
+    df = df.drop({ columns: columnsToDrop });
+    df.rename(renameMapping, { inplace: true });
+    df = df.loc({ columns: columnsToKeep });
+    df = addEmptyColumns(df); // Ensure df is modified with empty columns
+    return df;
+  };
 
-    // Read the file into a DataFrame object
-    let df: dfd.DataFrame = await dfd.readExcel(acceptedFiles[0]) as dfd.DataFrame;
+  const columnsToDrop: string[] = [
+    "Agency",
+    "Payee ID",
+    "Payee Name",
+    "Income Class",
+    "Writing Agt #",
+    "Writing Agent Level",
+    "Premium Transaction",
+    "Process Date",
+    "Premium Eff Date",
+    "Writing Agent Agency",
+    "Agency Name",
+  ];
 
-    // Rename columns
-    df.rename({
-      'Payment Date': 'Date',
-      'Writing Agt': 'Agent',
-    }, { inplace: true });
+  const renameMapping: { [key: string]: string } = {
+    "Product": "Product Name",
+    "Payment Date": "Date",
+    "Writing Agt": "Agent",
+    "Product Co": "Insurance Company",
+  };
 
-    // Add columns
-    const columnNames: string[] = [
-      '--',
-      'Commission %',
-      'Commission Amount',
-      'Commission Paid',
-      'Payment Method',
-      'Payment Date',
-    ]
-    
-    columnNames.forEach((columnName: string) => {
-      df = df.addColumn(columnName, Array(df.values.length).fill(''));
-    });
+  const columnsToKeep: string[] = [
+    "Date",
+    "Insurance Company",
+    "Product Type",
+    "Policy #",
+    "Product Name",
+    "Policy Issue Date",
+    "Insured Name",
+    "Billing Frequency",
+    "Premium Amt",
+    "Comm Rate %",
+    "Gross Comm Earned",
+    "% of particip",
+    "Compensation Type",
+    "Agent",
+    "Transaction Type",
+  ];
 
-    const workbook = XLSX.utils.book_new();
-
-    // Group data by agent
-    const uniqueValues = df['Agent'].unique().values;
-    const grouped: Groupby = df.groupby(['Agent']);
-
-    uniqueValues.forEach((value: any) => {
-      const groupDf = grouped.getGroup([value]).loc({ columns: df.columns });
-      const groupDfObject: any = dfd.toJSON(groupDf);
-      const worksheet = XLSX.utils.json_to_sheet(groupDfObject);
-      XLSX.utils.book_append_sheet(workbook, worksheet, value.toString());
-    });
-
-    // Add the Earnings Report tab
-    const emptyColumnValueMapping: any = {}
-    df.columns.forEach((column: string) => {
-      emptyColumnValueMapping[column] = '';
-    });
-
-    const columnNameMapping: any = {}
-    df.columns.forEach((column: string) => {
-      columnNameMapping[column] = column;
-    });
-
-    const emptyRowsData = [
-      emptyColumnValueMapping,
-      emptyColumnValueMapping,
-      columnNameMapping
+  // Add empty columns to DataFrame
+  const addEmptyColumns = (df: dfd.DataFrame): dfd.DataFrame => {
+    const newColumns: string[] = [
+      "--",
+      "Commission %",
+      "Commission Amount",
+      "Commission Paid",
+      "Payment Method",
+      "Payment Date",
     ];
-    const emptyRowsDf = new dfd.DataFrame(emptyRowsData);
 
-    uniqueValues.forEach((value: any) => {
-      const groupDf = grouped.getGroup([value]).loc({ columns: df.columns });
-
-      df = dfd.concat({
-        dfList: [df, emptyRowsDf, groupDf],
-        axis: 0,
-      }) as DataFrame;
+    newColumns.forEach(column => {
+      const emptyArray: string[] = new Array(df.shape[0]).fill(""); // Create an array of empty strings
+      df = df.addColumn(column, emptyArray); // Update df with new column
     });
 
-    const earningsReportJson: any = dfd.toJSON(df)
-    const earningsReportWorksheet = XLSX.utils.json_to_sheet(earningsReportJson);
-    const formattedToday = dayjs().format('MMDDYYYY')
-    XLSX.utils.book_append_sheet(workbook, earningsReportWorksheet, `EarningsReport_${formattedToday}`);
+    return df; // Return the modified DataFrame
+  };
 
-    // Bring Earnings Report back to the front
-    const sheetNames: string[] = workbook.SheetNames;
-    workbook.SheetNames = [sheetNames.pop() as string, ...sheetNames]
+  // Create individual sheets grouped by Agent
+  const createGroupedSheets = (workbook: XLSX.WorkBook, df: dfd.DataFrame): void => {
+    const grouped: Groupby = df.groupby(["Agent"]) as Groupby;
+    const uniqueAgents: string[] = df["Agent"].unique().values;
 
-    // Write data to file
-    XLSX.writeFile(workbook, 'grouped_data.xlsx');
-  }, []);
+    uniqueAgents.forEach(agent => {
+      const agentGroup: dfd.DataFrame = grouped.getGroup([agent]).loc({ columns: df.columns });
+      const agentGroupJson = dfd.toJSON(agentGroup);
+      if (Array.isArray(agentGroupJson)) {
+        const worksheet: XLSX.WorkSheet = XLSX.utils.json_to_sheet(agentGroupJson);
+        XLSX.utils.book_append_sheet(workbook, worksheet, agent.toString());
+      }
+    });
+  };
 
-  // UseDropzone hook to manage the drop area
+  // Create Earnings Report Sheet
+  const createEarningsReportSheet = (workbook: XLSX.WorkBook, df: dfd.DataFrame): void => {
+    const emptyRowsDf: dfd.DataFrame = createEmptyRows(df);
+    const grouped: Groupby = df.groupby(["Agent"]) as Groupby;
+    const uniqueAgents: string[] = df["Agent"].unique().values;
+
+    uniqueAgents.forEach(agent => {
+      const agentGroup: dfd.DataFrame = grouped.getGroup([agent]).loc({ columns: df.columns });
+      df = dfd.concat({ dfList: [df, emptyRowsDf, agentGroup], axis: 0 }) as DataFrame;
+    });
+
+    const earningsReportJson = dfd.toJSON(df);
+    if (Array.isArray(earningsReportJson)) {
+      const earningsReportSheet: XLSX.WorkSheet = XLSX.utils.json_to_sheet(earningsReportJson);
+
+      const formattedDate: string = dayjs().format("MMDDYYYY");
+      XLSX.utils.book_append_sheet(workbook, earningsReportSheet, `EarningsReport_${formattedDate}`);
+
+      // Move Earnings Report to the front
+      workbook.SheetNames = [workbook.SheetNames.pop() as string, ...workbook.SheetNames];
+    }
+  };
+
+  const createEmptyRows = (df: dfd.DataFrame): dfd.DataFrame => {
+    const emptyRow: { [key: string]: string } = Object.fromEntries(df.columns.map(column => [column, ""]));
+    const headerRow: { [key: string]: string } = Object.fromEntries(df.columns.map(column => [column, column]));
+    return new dfd.DataFrame([emptyRow, emptyRow, headerRow]);
+  };
+
+  // Dropzone for drag-and-drop functionality
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.ms-excel': ['.xls'],
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+      "application/vnd.ms-excel": [".xls"],
     },
     multiple: false,
   });
@@ -119,12 +168,12 @@ export default function Home() {
       <div
         {...getRootProps()}
         className={`w-full max-w-lg p-10 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
-          isDragActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white'
+          isDragActive ? "border-blue-400 bg-blue-50" : "border-gray-300 bg-white"
         }`}
       >
         <input {...getInputProps()} />
         <p className="text-center text-gray-600">
-          {isDragActive ? 'Drop the files here ...' : 'Drag & drop some files here, or click to select files'}
+          {isDragActive ? "Drop the files here ..." : "Drag & drop some files here, or click to select files"}
         </p>
       </div>
 
