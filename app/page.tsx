@@ -24,9 +24,11 @@ export default function Home() {
     let df: dfd.DataFrame = await loadAndCleanData(acceptedFiles[0]);
     const workbook: XLSX.WorkBook = XLSX.utils.book_new();
 
+    // Create sheets
     createGroupedSheets(workbook, df);
     createEarningsReportSheet(workbook, df);
 
+    // Write the workbook to file
     XLSX.writeFile(workbook, "grouped_data.xlsx");
   }, []);
 
@@ -117,6 +119,9 @@ export default function Home() {
       if (Array.isArray(agentGroupJson)) {
         const worksheet: XLSX.WorkSheet = XLSX.utils.json_to_sheet(agentGroupJson);
         XLSX.utils.book_append_sheet(workbook, worksheet, agent.toString());
+
+        // Resize columns to fit content
+        resizeColumns(worksheet, agentGroupJson, Object.keys(agentGroupJson[0]));
       }
     });
   };
@@ -135,9 +140,11 @@ export default function Home() {
     const earningsReportJson = dfd.toJSON(df);
     if (Array.isArray(earningsReportJson)) {
       const earningsReportSheet: XLSX.WorkSheet = XLSX.utils.json_to_sheet(earningsReportJson);
-
       const formattedDate: string = dayjs().format("MMDDYYYY");
       XLSX.utils.book_append_sheet(workbook, earningsReportSheet, `EarningsReport_${formattedDate}`);
+
+      // Resize columns to fit content for the earnings report sheet
+      resizeColumns(earningsReportSheet, earningsReportJson, Object.keys(earningsReportJson[0]));
 
       // Move Earnings Report to the front
       workbook.SheetNames = [workbook.SheetNames.pop() as string, ...workbook.SheetNames];
@@ -148,6 +155,37 @@ export default function Home() {
     const emptyRow: { [key: string]: string } = Object.fromEntries(df.columns.map(column => [column, ""]));
     const headerRow: { [key: string]: string } = Object.fromEntries(df.columns.map(column => [column, column]));
     return new dfd.DataFrame([emptyRow, emptyRow, headerRow]);
+  };
+
+  // Function to resize columns based on the content
+  const resizeColumns = (worksheet: XLSX.WorkSheet, jsonData: any[], headers: string[]) => {
+    const columnWidths: number[] = [];
+
+    // Check header lengths first
+    headers.forEach((header, index) => {
+      const headerLength = header.length;
+      if (!columnWidths[index] || headerLength > columnWidths[index]) {
+        columnWidths[index] = headerLength;
+      }
+    });
+
+    // Then check each row
+    jsonData.forEach(row => {
+      Object.keys(row).forEach((key, index) => {
+        const cellValue = row[key]?.toString() || "";
+        const cellLength = cellValue.length;
+
+        if (!columnWidths[index] || cellLength > columnWidths[index]) {
+          columnWidths[index] = cellLength;
+        }
+      });
+    });
+
+    // Set the column widths
+    columnWidths.forEach((width, index) => {
+      worksheet["!cols"] = worksheet["!cols"] || [];
+      worksheet["!cols"][index] = { wpx: (width + 2) * 7 }; // Adjust multiplier for better fitting
+    });
   };
 
   // Dropzone for drag-and-drop functionality
