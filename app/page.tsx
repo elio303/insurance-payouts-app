@@ -46,6 +46,7 @@ export default function Home() {
     df = df.drop({ columns: columnsToDrop });
     df.rename(renameMapping, { inplace: true });
     df = df.loc({ columns: columnsToKeep });
+    df = mapProductNames(df);
     df = addEmptyColumns(df); // Ensure df is modified with empty columns
     return df;
   };
@@ -88,6 +89,23 @@ export default function Home() {
     "Agent",
     "Transaction Type",
   ];
+
+  // TODO: Ask about mapping here AND ask about foundation
+  const productNameMapping: { [key: string]: string } = {
+    "LSW Level Term 30-G": "30 Year Term",
+    "LSW Level Term 20-G": "20 Year Term",
+    "LSW Level Term 15-G": "15 Year Term",
+    "LSW Level Term 10-G": "10 Year Term",
+    "FlexLife II": "FlexLife",
+    "FlexLife": "FlexLife",
+    "SummitLife": "SummitLife",
+    "SEC GROWTH": "SEC GROWTH",
+  };
+
+  const mapProductNames = (df: dfd.DataFrame): dfd.DataFrame => {
+    df["Product Name"] = df["Product Name"].map((value: string) => productNameMapping[value] || value);
+    return df;
+  };
 
   // Add empty columns to DataFrame
   const addEmptyColumns = (df: dfd.DataFrame): dfd.DataFrame => {
